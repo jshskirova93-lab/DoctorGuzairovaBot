@@ -30,7 +30,7 @@ from keyboards import (
 
 
 # Состояния анкеты пациента
-NAME, AGE, HEIGHT, WEIGHT, PHONE, PREFERRED_TIME, COMPLAINTS = range(7)
+NAME, AGE, HEIGHT, WEIGHT, PHONE, PREFERRED_TIME, COMPLAINTS, CONFIRM_APPLICATION = range(8)
 
 # Состояния переписки через бота
 ADMIN_REPLY, PATIENT_REPLY = range(100, 102)
@@ -436,24 +436,38 @@ async def receive_preferred_time(
     return COMPLAINTS
 
 
-async def receive_complaints(
-    update: Update,
+def application_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки подтверждения анкеты пациентом."""
+
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Отправить заявку",
+                    callback_data="confirm_application:send",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✏️ Заполнить заново",
+                    callback_data="confirm_application:restart",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ Отменить",
+                    callback_data="confirm_application:cancel",
+                )
+            ],
+        ]
+    )
+
+
+def build_application_messages(
     context: ContextTypes.DEFAULT_TYPE,
-) -> int:
-    """Получение жалобы и отправка анкеты администратору."""
-
-    if update.message is None or update.message.text is None:
-        return COMPLAINTS
-
-    complaints = update.message.text.strip()
-
-    if len(complaints) < 5:
-        await update.message.reply_text(
-            "Пожалуйста, опишите жалобу немного подробнее."
-        )
-        return COMPLAINTS
-
-    context.user_data["complaints"] = complaints
+    user,
+) -> tuple[str, str, int | None]:
+    """Формирование текста анкеты для администратора и пациента."""
 
     name = context.user_data.get("name", "Не указано")
     age = context.user_data.get("age", "Не указан")
@@ -464,6 +478,7 @@ async def receive_complaints(
         "preferred_time",
         "Не указано",
     )
+    complaints = context.user_data.get("complaints", "Не указано")
 
     if isinstance(height, (int, float)):
         height_text = f"{height:g}"
@@ -474,8 +489,6 @@ async def receive_complaints(
         weight_text = f"{weight:g}"
     else:
         weight_text = "Не указан"
-
-    user = update.effective_user
 
     if user is not None:
         telegram_id = user.id
@@ -512,6 +525,105 @@ async def receive_complaints(
         f"Telegram ID: {telegram_id or 'Не определён'}"
     )
 
+    patient_message = (
+        "Пожалуйста, проверьте данные анкеты перед отправкой.\n\n"
+        f"ФИО: {name}\n"
+        f"Возраст: {age} лет\n"
+        f"Рост: {height_text} см\n"
+        f"Вес: {weight_text} кг\n"
+        f"Телефон: {phone}\n"
+        f"Желаемая дата и время: {preferred_time}\n"
+        f"Основная жалоба: {complaints}\n\n"
+        "Если всё верно, нажмите «✅ Отправить заявку». "
+        "Если нужно исправить данные, нажмите «✏️ Заполнить заново»."
+    )
+
+    return admin_message, patient_message, telegram_id
+
+
+async def receive_complaints(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """Получение жалобы и показ анкеты пациенту для подтверждения."""
+
+    if update.message is None or update.message.text is None:
+        return COMPLAINTS
+
+    complaints = update.message.text.strip()
+
+    if len(complaints) < 5:
+        await update.message.reply_text(
+            "Пожалуйста, опишите жалобу немного подробнее."
+        )
+        return COMPLAINTS
+
+    context.user_data["complaints"] = complaints
+
+    _, patient_message, _ = build_application_messages(
+        context,
+        update.effective_user,
+    )
+
+    await update.message.reply_text(
+        patient_message,
+        reply_markup=application_confirm_keyboard(),
+    )
+
+    return CONFIRM_APPLICATION
+
+
+async def confirm_application(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> int:
+    """Подтверждение, повторное заполнение или отмена анкеты."""
+
+    query = update.callback_query
+
+    if query is None:
+        return CONFIRM_APPLICATION
+
+    await query.answer()
+
+    if query.data == "confirm_application:restart":
+        context.user_data.clear()
+
+        if query.message is not None:
+            await query.message.reply_text(
+                "Начнём заполнение анкеты заново.\n\n"
+                "Шаг 1 из 7\n\n"
+                "Введите, пожалуйста, Ваши фамилию, имя и отчество.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+
+        return NAME
+
+    if query.data == "confirm_application:cancel":
+        context.user_data.clear()
+
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        if query.message is not None:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text="Заполнение анкеты отменено.",
+                reply_markup=main_keyboard,
+            )
+
+        return ConversationHandler.END
+
+    if query.data != "confirm_application:send":
+        return CONFIRM_APPLICATION
+
+    admin_message, patient_message, telegram_id = build_application_messages(
+        context,
+        update.effective_user,
+    )
+
     try:
         if telegram_id is not None:
             reply_markup = admin_reply_keyboard(telegram_id)
@@ -530,32 +642,28 @@ async def receive_complaints(
             error,
         )
 
-        await update.message.reply_text(
-            "⚠️ Анкета заполнена, но при её передаче "
-            "администратору произошла ошибка.\n\n"
-            "Пожалуйста, попробуйте позднее или свяжитесь "
-            "с администратором другим способом.",
-            reply_markup=main_keyboard,
-        )
+        if query.message is not None:
+            await query.message.reply_text(
+                "⚠️ Анкета заполнена, но при её передаче "
+                "администратору произошла ошибка.\n\n"
+                "Пожалуйста, попробуйте позднее или свяжитесь "
+                "с администратором другим способом.",
+                reply_markup=main_keyboard,
+            )
 
         context.user_data.clear()
 
         return ConversationHandler.END
 
-    await update.message.reply_text(
-        "✅ Ваша предварительная анкета заполнена "
-        "и передана администратору.\n\n"
-        f"ФИО: {name}\n"
-        f"Возраст: {age} лет\n"
-        f"Рост: {height_text} см\n"
-        f"Вес: {weight_text} кг\n"
-        f"Телефон: {phone}\n"
-        f"Желаемая дата и время: {preferred_time}\n"
-        f"Основная жалоба: {complaints}\n\n"
-        "Администратор ознакомится с информацией "
-        "и свяжется с Вами для согласования консультации.",
-        reply_markup=main_keyboard,
-    )
+    if query.message is not None:
+        await query.message.reply_text(
+            "✅ Ваша предварительная анкета заполнена "
+            "и передана администратору.\n\n"
+            f"{patient_message}\n\n"
+            "Администратор ознакомится с информацией "
+            "и свяжется с Вами для согласования консультации.",
+            reply_markup=main_keyboard,
+        )
 
     context.user_data.clear()
 
