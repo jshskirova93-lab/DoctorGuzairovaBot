@@ -1,4 +1,7 @@
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from telegram import Update
 from telegram.ext import (
@@ -16,12 +19,12 @@ try:
 except ImportError:
     LOCAL_TOKEN = None
 
-TOKEN = os.getenv("BOT_TOKEN") or LOCAL_TOKEN
+TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or LOCAL_TOKEN
 
 if not TOKEN:
     raise RuntimeError(
-        "Токен Telegram-бота не найден. "
-        "Добавьте переменную окружения BOT_TOKEN."
+        "Telegram bot token not found. "
+        "Set BOT_TOKEN or TOKEN environment variable."
     )
 
 from keyboards import main_keyboard

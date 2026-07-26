@@ -8,7 +8,15 @@ from telegram import (
 )
 from telegram.ext import ContextTypes, ConversationHandler
 
-from config import ADMIN_CHAT_ID
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+if not ADMIN_CHAT_ID:
+    raise RuntimeError("Не задана переменная окружения ADMIN_CHAT_ID.")
+ADMIN_CHAT_ID = int(ADMIN_CHAT_ID)
 
 from texts import (
     ABOUT_DOCTOR,
