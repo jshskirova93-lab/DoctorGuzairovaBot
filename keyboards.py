@@ -26,7 +26,6 @@ price_keyboard = ReplyKeyboardMarkup(
 
 preparation_keyboard = ReplyKeyboardMarkup(
     [
-        ["▶️ Продолжить"],
         ["🔙 Главное меню"],
     ],
     resize_keyboard=True,

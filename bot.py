@@ -1,7 +1,4 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from telegram import Update
 from telegram.ext import (
@@ -19,12 +16,12 @@ try:
 except ImportError:
     LOCAL_TOKEN = None
 
-TOKEN = os.getenv("BOT_TOKEN") or os.getenv("TOKEN") or LOCAL_TOKEN
+TOKEN = os.getenv("BOT_TOKEN") or LOCAL_TOKEN
 
 if not TOKEN:
     raise RuntimeError(
-        "Telegram bot token not found. "
-        "Set BOT_TOKEN or TOKEN environment variable."
+        "Токен Telegram-бота не найден. "
+        "Добавьте переменную окружения BOT_TOKEN."
     )
 
 from keyboards import main_keyboard
@@ -38,7 +35,6 @@ from handlers import (
     receive_phone,
     receive_preferred_time,
     receive_complaints,
-    confirm_application,
     cancel_questionnaire,
     start_admin_reply,
     send_admin_reply,
@@ -52,7 +48,6 @@ from handlers import (
     PHONE,
     PREFERRED_TIME,
     COMPLAINTS,
-    CONFIRM_APPLICATION,
     ADMIN_REPLY,
     PATIENT_REPLY,
 )
@@ -108,9 +103,8 @@ def main() -> None:
         entry_points=[
             MessageHandler(
                 filters.Regex(
-                    "^(\U0001F4C5 \u0417\u0430\u043f\u0438\u0441\u044c \u043d\u0430 \u043a\u043e\u043d\u0441\u0443\u043b\u044c\u0442\u0430\u0446\u0438\u044e|"
-                    "\U0001F4C5 \u0417\u0430\u043f\u0438\u0441\u044c|"
-                    "\u25b6\ufe0f \u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c)$"
+                    r"^(📅 Запись на консультацию|"
+                    r"📅 Запись)$"
                 ),
                 start_questionnaire,
             )
@@ -156,12 +150,6 @@ def main() -> None:
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     receive_complaints,
-                )
-            ],
-            CONFIRM_APPLICATION: [
-                CallbackQueryHandler(
-                    confirm_application,
-                    pattern=r"^confirm_application:",
                 )
             ],
         },
@@ -221,7 +209,7 @@ def main() -> None:
 
     print("===================================")
     print(" DoctorGuzairovaBot запущен")
-    print(" Версия 1.9")
+    print(" Версия 1.8")
     print(" Анкета пациента: 7 шагов")
     print(" Передача анкеты администратору подключена")
     print(" Ответ администратора пациенту подключён")
