@@ -36,6 +36,7 @@ from handlers import (
     receive_phone,
     receive_preferred_time,
     receive_complaints,
+    confirm_application,
     cancel_questionnaire,
     start_admin_reply,
     send_admin_reply,
@@ -49,6 +50,7 @@ from handlers import (
     PHONE,
     PREFERRED_TIME,
     COMPLAINTS,
+    CONFIRM_APPLICATION,
     ADMIN_REPLY,
     PATIENT_REPLY,
 )
@@ -148,6 +150,12 @@ def main() -> None:
                 MessageHandler(
                     filters.TEXT & ~filters.COMMAND,
                     receive_complaints,
+                )
+            ],
+            CONFIRM_APPLICATION: [
+                CallbackQueryHandler(
+                    confirm_application,
+                    pattern=r"^confirm_application:",
                 )
             ],
         },
