@@ -103,11 +103,7 @@ def main() -> None:
     questionnaire_handler = ConversationHandler(
         entry_points=[
             MessageHandler(
-                filters.Regex(
-                    r"^(рџ“… Р—Р°РїРёСЃСЊ РЅР° РєРѕРЅСЃСѓР»СЊС‚Р°С†РёСЋ|"
-                    r"рџ“… Р—Р°РїРёСЃСЊ|"
-                    r"в–¶пёЏ РџСЂРѕРґРѕР»Р¶РёС‚СЊ)$"
-                ),
+                filters.Regex(r"^📅 Запись на консультацию$"),
                 start_questionnaire,
             )
         ],
