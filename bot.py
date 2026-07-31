@@ -21,8 +21,8 @@ if not TOKEN:
 
 if not TOKEN:
     raise RuntimeError(
-        "Токен Telegram-бота не найден. "
-        "Добавьте переменную окружения BOT_TOKEN."
+        "РўРѕРєРµРЅ Telegram-Р±РѕС‚Р° РЅРµ РЅР°Р№РґРµРЅ. "
+        "Р”РѕР±Р°РІСЊС‚Рµ РїРµСЂРµРјРµРЅРЅСѓСЋ РѕРєСЂСѓР¶РµРЅРёСЏ BOT_TOKEN."
     )
 
 from keyboards import main_keyboard
