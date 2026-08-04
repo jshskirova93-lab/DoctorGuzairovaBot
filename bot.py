@@ -307,7 +307,7 @@ async def receive_site_application(request: web.Request) -> web.Response:
         )
         email_sent = True
     except Exception as error:
-        print("Ошибка отправки заявки сайта в Gmail:", type(error).__name__)
+        print("Ошибка отправки заявки сайта в Gmail:",str(error)
 
     if not telegram_sent and not email_sent:
         return web.json_response(
