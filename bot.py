@@ -1,11 +1,9 @@
-﻿import os
+import os
 import re
 import secrets
-import smtplib
-import ssl
+import httpx
 import time
 from collections import defaultdict, deque
-from email.message import EmailMessage
 
 from aiohttp import web
 from telegram import Update
@@ -167,30 +165,38 @@ def send_application_email(
     name: str,
     application_text: str,
 ) -> None:
-    """Отправка заявки через Gmail SMTP."""
+    """Отправка заявки через Resend API.
 
-    gmail_user = os.getenv("GMAIL_USER", "").strip()
-    gmail_password = os.getenv("GMAIL_APP_PASSWORD", "").replace(" ", "")
-    gmail_to = os.getenv("GMAIL_TO", gmail_user).strip()
+    Используется обычный HTTPS-запрос (порт 443) вместо SMTP,
+    потому что Railway блокирует исходящие почтовые порты.
+    """
 
-    if not gmail_user or not gmail_password or not gmail_to:
-        raise RuntimeError("Переменные Gmail в Railway ещё не настроены.")
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    mail_to = os.getenv("GMAIL_TO", "").strip()
 
-    email = EmailMessage()
-    email["Subject"] = f"Новая заявка с сайта: {name} ({application_id})"
-    email["From"] = gmail_user
-    email["To"] = gmail_to
-    email.set_content(application_text)
+    if not resend_key or not mail_to:
+        raise RuntimeError(
+            "Переменные RESEND_API_KEY или GMAIL_TO в Railway не настроены."
+        )
 
-    smtp_context = ssl.create_default_context()
-    with smtplib.SMTP_SSL(
-        "smtp.gmail.com",
-        465,
-        context=smtp_context,
+    response = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {resend_key}"},
+        json={
+            # Пока домен не подтверждён в Resend — шлём с их тестового адреса.
+            "from": "onboarding@resend.dev",
+            "to": [mail_to],
+            "subject": f"Новая заявка с сайта: {name} ({application_id})",
+            "text": application_text,
+        },
         timeout=20,
-    ) as smtp:
-        smtp.login(gmail_user, gmail_password)
-        smtp.send_message(email)
+    )
+
+    # Ошибку показываем полностью, чтобы её было видно в логах Railway.
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Resend вернул ошибку {response.status_code}: {response.text}"
+        )
 
 
 async def health(request: web.Request) -> web.Response:
@@ -200,8 +206,8 @@ async def health(request: web.Request) -> web.Response:
         {
             "ok": True,
             "telegram_configured": bool(ADMIN_CHAT_ID),
-            "gmail_configured": bool(
-                os.getenv("GMAIL_USER") and os.getenv("GMAIL_APP_PASSWORD")
+            "email_configured": bool(
+                os.getenv("RESEND_API_KEY") and os.getenv("GMAIL_TO")
             ),
         }
     )
@@ -297,7 +303,7 @@ async def receive_site_application(request: web.Request) -> web.Response:
         )
         telegram_sent = True
     except Exception as error:
-        print("Ошибка отправки заявки сайта в Telegram:", type(error).__name__)
+        print("Ошибка отправки заявки сайта в Telegram:", str(error))
 
     try:
         send_application_email(
@@ -307,7 +313,7 @@ async def receive_site_application(request: web.Request) -> web.Response:
         )
         email_sent = True
     except Exception as error:
-        print("Ошибка отправки заявки сайта в Gmail:",str(error))
+        print("Ошибка отправки заявки сайта на почту:", str(error))
 
     if not telegram_sent and not email_sent:
         return web.json_response(
@@ -530,13 +536,13 @@ def main() -> None:
 
     print("===================================")
     print(" DoctorGuzairovaBot запущен")
-    print(" Версия 2.1")
+    print(" Версия 2.2")
     print(" Анкета пациента: 7 шагов")
     print(" Передача анкеты администратору подключена")
     print(" Ответ администратора пациенту подключён")
     print(" Ответ пациента администратору подключён")
     print(" Команда /myid подключена")
-    print(" Заявки с сайта: Telegram + Gmail")
+    print(" Заявки с сайта: Telegram + почта через Resend")
     print("===================================")
 
     app.run_polling()
