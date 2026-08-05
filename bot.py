@@ -183,8 +183,7 @@ def send_application_email(
         "https://api.resend.com/emails",
         headers={"Authorization": f"Bearer {resend_key}"},
         json={
-            # Пока домен не подтверждён в Resend — шлём с их тестового адреса.
-            "from": "onboarding@resend.dev",
+            "from": "Заявки с сайта <zayavka@doctorgulnaz.ru>",
             "to": [mail_to],
             "subject": f"Новая заявка с сайта: {name} ({application_id})",
             "text": application_text,
