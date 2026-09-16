@@ -63,6 +63,10 @@ from handlers import (
 )
 
 
+# Выключатель Telegram. В Railway TELEGRAM_ENABLED=0 — бот молчит,
+# но приём заявок с сайта и отправка на почту продолжают работать.
+TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "1").strip() != "0"
+
 DEFAULT_ALLOWED_ORIGINS = {
     "https://doctorgulnaz.ru",
     "https://www.doctorgulnaz.ru",
@@ -204,7 +208,7 @@ async def health(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "ok": True,
-            "telegram_configured": bool(ADMIN_CHAT_ID),
+            "telegram_enabled": TELEGRAM_ENABLED,
             "email_configured": bool(
                 os.getenv("RESEND_API_KEY") and os.getenv("GMAIL_TO")
             ),
@@ -295,14 +299,15 @@ async def receive_site_application(request: web.Request) -> web.Response:
     telegram_sent = False
     email_sent = False
 
-    try:
-        await request.app["telegram_application"].bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=application_text,
-        )
-        telegram_sent = True
-    except Exception as error:
-        print("Ошибка отправки заявки сайта в Telegram:", str(error))
+    if TELEGRAM_ENABLED:
+        try:
+            await request.app["telegram_application"].bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=application_text,
+            )
+            telegram_sent = True
+        except Exception as error:
+            print("Ошибка отправки заявки сайта в Telegram:", str(error))
 
     try:
         send_application_email(
@@ -335,8 +340,8 @@ async def receive_site_application(request: web.Request) -> web.Response:
     )
 
 
-async def start_web_server(application: Application) -> None:
-    """Запуск HTTP-обработчика вместе с Telegram-ботом."""
+def build_web_application(application) -> web.Application:
+    """Веб-сервер заявок. Нужен и с Telegram, и без него."""
 
     web_application = web.Application(client_max_size=16 * 1024)
     web_application["telegram_application"] = application
@@ -350,6 +355,13 @@ async def start_web_server(application: Application) -> None:
         "/api/application",
         receive_site_application,
     )
+    return web_application
+
+
+async def start_web_server(application: Application) -> None:
+    """Запуск HTTP-обработчика вместе с Telegram-ботом."""
+
+    web_application = build_web_application(application)
 
     runner = web.AppRunner(web_application)
     await runner.setup()
@@ -411,6 +423,21 @@ async def show_my_id(
 
 
 def main() -> None:
+    if not TELEGRAM_ENABLED:
+        # Telegram не опрашиваем вовсе: бот не отвечает,
+        # работает только приём заявок с сайта и отправка на почту.
+        port = int(os.getenv("PORT", "8080"))
+        print("===================================")
+        print(" DoctorGuzairovaBot: Telegram ВЫКЛЮЧЕН")
+        print(" Заявки с сайта: только почта через Resend")
+        print("===================================")
+        web.run_app(
+            build_web_application(None),
+            host="0.0.0.0",
+            port=port,
+        )
+        return
+
     app = (
         Application.builder()
         .token(TOKEN)
