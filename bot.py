@@ -71,6 +71,18 @@ DEFAULT_ALLOWED_ORIGINS = {
     "https://doctorgulnaz.ru",
     "https://www.doctorgulnaz.ru",
 }
+# Сайт медцентра «Табиб» (tabib102.ru): форма отзывов, жалоб и предложений.
+# Его обращения идут ОТДЕЛЬНО — только на почту клиники, без Telegram
+# и без личной почты из GMAIL_TO: это данные пациентов клиники.
+TABIB_ORIGINS = {
+    "https://tabib102.ru",
+    "https://www.tabib102.ru",
+    "https://jshskirova93-lab-tabib-old-site-3202.twc1.net",
+    "https://jshskirova93-lab-tabib-site-eb03.twc1.net",
+}
+TABIB_MAIL_TO_DEFAULT = "tabibtabib@yandex.ru"
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 RATE_LIMIT_REQUESTS = 5
 RATE_LIMIT_WINDOW_SECONDS = 10 * 60
 request_history: dict[str, deque[float]] = defaultdict(deque)
@@ -81,13 +93,16 @@ def allowed_origins() -> set[str]:
 
     configured = os.getenv("ALLOWED_ORIGINS", "")
     if not configured.strip():
-        return DEFAULT_ALLOWED_ORIGINS
+        origins = set(DEFAULT_ALLOWED_ORIGINS)
+    else:
+        origins = {
+            origin.strip().rstrip("/")
+            for origin in configured.split(",")
+            if origin.strip()
+        }
 
-    return {
-        origin.strip().rstrip("/")
-        for origin in configured.split(",")
-        if origin.strip()
-    }
+    # Адреса Табиба разрешены всегда, даже если ALLOWED_ORIGINS задан в Railway.
+    return origins | TABIB_ORIGINS
 
 
 def cors_headers(origin: str) -> dict[str, str]:
@@ -202,6 +217,97 @@ def send_application_email(
         )
 
 
+def build_tabib_message(
+    message_id: str,
+    name: str,
+    phone: str,
+    email: str,
+    text: str,
+) -> str:
+    """Текст обращения с сайта «Табиб» для почты клиники."""
+
+    return (
+        "ОБРАЩЕНИЕ С САЙТА МЕДЦЕНТРА «ТАБИБ»\n"
+        "(отзыв, жалоба или предложение)\n\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone or 'не указан'}\n"
+        f"Email: {email or 'не указан'}\n\n"
+        f"Сообщение:\n{text}\n\n"
+        "──────────────\n"
+        f"Номер обращения: {message_id}\n"
+        "Источник: tabib102.ru"
+    )
+
+
+def send_tabib_email(message_id: str, name: str, email: str, body: str) -> None:
+    """Отправка обращения на почту клиники через Resend."""
+
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    mail_to = os.getenv("TABIB_MAIL_TO", "").strip() or TABIB_MAIL_TO_DEFAULT
+    if not resend_key:
+        raise RuntimeError("Переменная RESEND_API_KEY в Railway не настроена.")
+
+    payload = {
+        "from": "Сайт МЦ Табиб <zayavka@doctorgulnaz.ru>",
+        "to": [mail_to],
+        "subject": f"Обращение с сайта tabib102.ru: {name} ({message_id})",
+        "text": body,
+    }
+    # Нажав «Ответить» в почте, клиника ответит прямо пациенту.
+    if email:
+        payload["reply_to"] = email
+
+    response = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {resend_key}"},
+        json=payload,
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Resend вернул ошибку {response.status_code}: {response.text}"
+        )
+
+
+def receive_tabib_message(data: dict, headers: dict) -> web.Response:
+    """Проверка и отправка обращения с сайта «Табиб»."""
+
+    def answer(ok: bool, message: str = "", status: int = 200, **extra):
+        body = {"ok": ok, **extra}
+        if message:
+            body["message"] = message
+        return web.json_response(body, status=status, headers=headers)
+
+    name = clean_text(data.get("name"), 120)
+    phone = clean_text(data.get("phone"), 40)
+    email = clean_text(data.get("email"), 120)
+    # Переносы строк в сообщении сохраняем — так его легче читать.
+    raw_text = data.get("message") if isinstance(data.get("message"), str) else ""
+    text = "\n".join(" ".join(line.split()) for line in raw_text.strip().splitlines())[:3000]
+    phone_digits = re.sub(r"\D", "", phone)
+
+    if len(name) < 2:
+        return answer(False, "Укажите, пожалуйста, ваше имя.", 400)
+    if email and not EMAIL_RE.match(email):
+        return answer(False, "Проверьте адрес электронной почты.", 400)
+    if phone and not 10 <= len(phone_digits) <= 15:
+        return answer(False, "Проверьте номер телефона.", 400)
+    if not phone and not email:
+        return answer(False, "Оставьте телефон или почту, чтобы мы могли ответить.", 400)
+    if len(text) < 5:
+        return answer(False, "Напишите, пожалуйста, ваше сообщение.", 400)
+
+    message_id = secrets.token_hex(4).upper()
+    body = build_tabib_message(message_id, name, phone, email, text)
+    try:
+        send_tabib_email(message_id, name, email, body)
+    except Exception as error:
+        print("Ошибка отправки обращения Табиб на почту:", str(error))
+        return answer(False, "Сообщение временно не отправлено. Позвоните в регистратуру.", 502)
+
+    return answer(True, application_id=message_id)
+
+
 async def health(request: web.Request) -> web.Response:
     """Проверка доступности обработчика Railway."""
 
@@ -266,6 +372,9 @@ async def receive_site_application(request: web.Request) -> web.Response:
     # Скрытое поле-ловушка: обычный посетитель его не заполняет.
     if clean_text(data.get("website"), 200):
         return web.json_response({"ok": True}, headers=headers)
+
+    if origin.rstrip("/") in TABIB_ORIGINS:
+        return receive_tabib_message(data, headers)
 
     name = clean_text(data.get("name"), 120)
     phone = clean_text(data.get("phone"), 40)
