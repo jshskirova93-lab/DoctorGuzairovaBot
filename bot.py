@@ -81,6 +81,15 @@ TABIB_ORIGINS = {
     "https://jshskirova93-lab-tabib-site-eb03.twc1.net",
 }
 TABIB_MAIL_TO_DEFAULT = "tabibtabib@yandex.ru"
+# Сайт стоматологии «Идеал» (idealstomatufa.ru, врач Хамзина А. Ф.): записи на приём.
+# Как и Табиб, идут ОТДЕЛЬНО — только на почту клиники, без Telegram.
+# jshskirova93-lab.github.io — временный адрес, пока сайт не посажен на домен.
+IDEAL_ORIGINS = {
+    "https://idealstomatufa.ru",
+    "https://www.idealstomatufa.ru",
+    "https://jshskirova93-lab.github.io",
+}
+IDEAL_MAIL_TO_DEFAULT = "idealstomat@bk.ru"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 RATE_LIMIT_REQUESTS = 5
@@ -101,8 +110,8 @@ def allowed_origins() -> set[str]:
             if origin.strip()
         }
 
-    # Адреса Табиба разрешены всегда, даже если ALLOWED_ORIGINS задан в Railway.
-    return origins | TABIB_ORIGINS
+    # Адреса Табиба и Идеала разрешены всегда, даже если ALLOWED_ORIGINS задан в Railway.
+    return origins | TABIB_ORIGINS | IDEAL_ORIGINS
 
 
 def cors_headers(origin: str) -> dict[str, str]:
@@ -308,6 +317,103 @@ def receive_tabib_message(data: dict, headers: dict) -> web.Response:
     return answer(True, application_id=message_id)
 
 
+def build_ideal_message(
+    application_id: str,
+    name: str,
+    phone: str,
+    preferred_time: str,
+    service: str,
+    text: str,
+) -> str:
+    """Текст записи с сайта стоматологии «Идеал» для почты клиники."""
+
+    message = (
+        "ЗАПИСЬ НА ПРИЁМ С САЙТА СТОМАТОЛОГИИ «ИДЕАЛ»\n\n"
+        f"Имя: {name}\n"
+        f"Телефон: {phone}\n"
+        f"Удобное время: {preferred_time or 'не указано'}\n"
+        f"Что беспокоит / услуга: {service or 'не указано'}\n"
+    )
+    if text:
+        message += f"\nСообщение:\n{text}\n"
+    return (
+        f"{message}\n──────────────\n"
+        f"Номер заявки: {application_id}\n"
+        "Согласие на обработку персональных данных получено.\n"
+        "Источник: idealstomatufa.ru"
+    )
+
+
+def send_ideal_email(application_id: str, name: str, body: str) -> None:
+    """Отправка записи на почту клиники «Идеал» через Resend."""
+
+    resend_key = os.getenv("RESEND_API_KEY", "").strip()
+    mail_to = os.getenv("IDEAL_MAIL_TO", "").strip() or IDEAL_MAIL_TO_DEFAULT
+    if not resend_key:
+        raise RuntimeError("Переменная RESEND_API_KEY в Railway не настроена.")
+
+    response = httpx.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {resend_key}"},
+        json={
+            # Пока домен idealstomatufa.ru не подтверждён в Resend,
+            # письма уходят с уже подтверждённого адреса doctorgulnaz.ru.
+            "from": os.getenv("IDEAL_MAIL_FROM", "").strip()
+            or "Сайт клиники Идеал <zayavka@doctorgulnaz.ru>",
+            "to": [mail_to],
+            "subject": f"Запись с сайта idealstomatufa.ru: {name} ({application_id})",
+            "text": body,
+        },
+        timeout=20,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(
+            f"Resend вернул ошибку {response.status_code}: {response.text}"
+        )
+
+
+def receive_ideal_application(data: dict, headers: dict) -> web.Response:
+    """Проверка и отправка записи с сайта стоматологии «Идеал»."""
+
+    def answer(ok: bool, message: str = "", status: int = 200, **extra):
+        body = {"ok": ok, **extra}
+        if message:
+            body["message"] = message
+        return web.json_response(body, status=status, headers=headers)
+
+    name = clean_text(data.get("name"), 120)
+    phone = clean_text(data.get("phone"), 40)
+    preferred_time = clean_text(data.get("time"), 120)
+    service = clean_text(data.get("service"), 120)
+    raw_text = data.get("message") if isinstance(data.get("message"), str) else ""
+    text = "\n".join(" ".join(line.split()) for line in raw_text.strip().splitlines())[:1500]
+    phone_digits = re.sub(r"\D", "", phone)
+
+    if len(name) < 2:
+        return answer(False, "Укажите, пожалуйста, ваше имя.", 400)
+    if not 10 <= len(phone_digits) <= 15:
+        return answer(False, "Проверьте номер телефона.", 400)
+    # Согласие на обработку персональных данных обязательно.
+    if data.get("consent") is not True:
+        return answer(False, "Нужно согласие на обработку персональных данных.", 400)
+
+    application_id = secrets.token_hex(4).upper()
+    body = build_ideal_message(
+        application_id, name, phone, preferred_time, service, text
+    )
+    try:
+        send_ideal_email(application_id, name, body)
+    except Exception as error:
+        print("Ошибка отправки записи Идеал на почту:", str(error))
+        return answer(
+            False,
+            "Заявка временно не отправлена. Позвоните нам: +7 (993) 040-45-46.",
+            502,
+        )
+
+    return answer(True, application_id=application_id)
+
+
 async def health(request: web.Request) -> web.Response:
     """Проверка доступности обработчика Railway."""
 
@@ -375,6 +481,9 @@ async def receive_site_application(request: web.Request) -> web.Response:
 
     if origin.rstrip("/") in TABIB_ORIGINS:
         return receive_tabib_message(data, headers)
+
+    if origin.rstrip("/") in IDEAL_ORIGINS:
+        return receive_ideal_application(data, headers)
 
     name = clean_text(data.get("name"), 120)
     phone = clean_text(data.get("phone"), 40)
